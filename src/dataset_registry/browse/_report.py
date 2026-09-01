@@ -8,6 +8,7 @@ from dataset_registry._registry import (
     load_representation,
     load_specimen,
     rename_specimen,
+    resolve_dependency,
     set_specimen_fields,
 )
 
@@ -47,12 +48,30 @@ def _specimen_row(registry_root: Path, specimen_id: str) -> dict[str, Any]:
     }
 
 
+def _depends_on_names(registry_root: Path, specimen_id: str, depends_on: list[str]) -> str:
+    """The display `name` of each `depends_on` reference, not its raw id.
+
+    A reference without a `.` is a same-specimen representation id (the only
+    kind of dependency this registry format currently supports); one
+    containing a `.` is the `resolve_dependency` cross-specimen form.
+    """
+    names: list[str] = []
+    for reference in depends_on:
+        if "." in reference:
+            dependency = resolve_dependency(registry_root, reference)
+        else:
+            dependency = load_representation(registry_root, specimen_id, reference)
+        assert dependency.name is not None  # always populated by load_representation
+        names.append(dependency.name)
+    return ", ".join(names)
+
+
 def _representation_row(
     registry_root: Path, specimen_id: str, representation_id: str
 ) -> dict[str, Any]:
     specimen = load_specimen(registry_root, specimen_id)
     representation = load_representation(registry_root, specimen_id, representation_id)
-    axes = ", ".join(a.name for a in representation.axes)
+    axes = ", ".join(a.name for a in representation.axes) if hasattr(representation, "axes") else ""
     return {
         "specimen": specimen.name,
         "representation": representation.name,
@@ -60,7 +79,9 @@ def _representation_row(
         "path": representation.path,
         "axes": axes,
         "acquisition_date": representation.acquisition_date,
-        "depends_on": ", ".join(representation.depends_on or []),
+        "depends_on": _depends_on_names(
+            registry_root, specimen_id, representation.depends_on or []
+        ),
         **representation.metadata,
     }
 
@@ -280,12 +301,13 @@ def _specimen_page(registry_root: Path, specimen_id: str) -> "panel.template.Fas
     edit_button.on_click(_show_edit)
 
     form = panel.Column(panel.Row(edit_button), content, sizing_mode="stretch_width", max_width=700)
-    nav = _nav_bar(
-        left=("all specimens", "specimens"),
-        right=("representations", f"{_REPRESENTATIONS_ROUTE}-{specimen_id}"),
-    )
+    nav = _nav_bar(left=("all specimens", "specimens"), right=None)
+    representations_heading = panel.pane.Markdown("## Representations", margin=(15, 10, 0, 10))
+    representations_table = _representations_table(registry_root, [specimen_id])
     specimen = load_specimen(registry_root, specimen_id)
-    return _page(specimen.name, registry_root, form, nav)
+    return _page(
+        specimen.name, registry_root, form, nav, representations_heading, representations_table
+    )
 
 
 def _coerce_metadata_value(text: str) -> Any:
@@ -309,18 +331,24 @@ def _coerce_metadata_value(text: str) -> Any:
     return text
 
 
+def _representations_table(
+    registry_root: Path, specimen_ids: list[str]
+) -> "panel.widgets.Tabulator":
+    rows = [
+        _representation_row(registry_root, specimen_id, representation_id)
+        for specimen_id in specimen_ids
+        for representation_id in list_representations(registry_root, specimen_id)
+    ]
+    return _table(_dataframe(rows, _REPRESENTATION_LEADING_COLUMNS))
+
+
 def _representations_page(
     registry_root: Path,
     specimen_ids: list[str],
     only_specimen_id: str | None = None,
 ) -> "panel.template.FastListTemplate":
     ids = [only_specimen_id] if only_specimen_id is not None else specimen_ids
-    rows = [
-        _representation_row(registry_root, specimen_id, representation_id)
-        for specimen_id in ids
-        for representation_id in list_representations(registry_root, specimen_id)
-    ]
-    table = _table(_dataframe(rows, _REPRESENTATION_LEADING_COLUMNS))
+    table = _representations_table(registry_root, ids)
 
     body = [table]
     if only_specimen_id is not None:

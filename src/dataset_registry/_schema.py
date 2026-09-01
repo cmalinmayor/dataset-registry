@@ -142,6 +142,19 @@ class SegmentationRepresentation(_RepresentationBase):
     """Required, same reasoning as `ImageRepresentation.axes`."""
 
 
+class PointsRepresentation(_RepresentationBase):
+    """Point annotations (e.g. per-timepoint nucleus/cell coordinates), not a pixel array.
+
+    No `axes`: unlike `ImageRepresentation`/`SegmentationRepresentation`,
+    this isn't a pixel array with a fixed shape -- it's a set of points
+    (typically one file per timepoint), so there's no array shape for
+    `axes` to describe.
+    """
+
+    kind: Literal["points"] = "points"
+
+
 Representation = Annotated[
-    ImageRepresentation | SegmentationRepresentation, Field(discriminator="kind")
+    ImageRepresentation | SegmentationRepresentation | PointsRepresentation,
+    Field(discriminator="kind"),
 ]

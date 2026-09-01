@@ -22,6 +22,7 @@ from ._registry import (
 from ._schema import (
     Axis,
     ImageRepresentation,
+    PointsRepresentation,
     RegistryInfo,
     Representation,
     SegmentationRepresentation,
@@ -38,6 +39,7 @@ except PackageNotFoundError:  # package is not installed
 __all__ = [
     "Axis",
     "ImageRepresentation",
+    "PointsRepresentation",
     "Registry",
     "RegistryInfo",
     "Representation",

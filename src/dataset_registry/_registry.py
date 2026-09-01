@@ -11,6 +11,7 @@ from pydantic import TypeAdapter
 
 from dataset_registry._schema import (
     ImageRepresentation,
+    PointsRepresentation,
     RegistryInfo,
     Representation,
     SegmentationRepresentation,
@@ -23,9 +24,9 @@ REGISTRY_INFO_FILENAME = "registry.toml"
 
 _ID_GENERATION_ATTEMPTS = 100
 
-_representation_adapter: TypeAdapter[ImageRepresentation | SegmentationRepresentation] = (
-    TypeAdapter(Representation)
-)
+_representation_adapter: TypeAdapter[
+    ImageRepresentation | SegmentationRepresentation | PointsRepresentation
+] = TypeAdapter(Representation)
 
 # Sentinel distinguishing "leave this field unchanged" from "set it to None".
 _UNSET = object()
@@ -226,8 +227,9 @@ def load_representation(
         representation_id: The representation's stable id.
 
     Returns:
-        The loaded representation, an `ImageRepresentation` or
-        `SegmentationRepresentation` depending on its recorded `kind`.
+        The loaded representation, an `ImageRepresentation`,
+        `SegmentationRepresentation`, or `PointsRepresentation` depending on
+        its recorded `kind`.
 
     Raises:
         FileNotFoundError: If no such specimen or representation exists.
@@ -240,12 +242,12 @@ def load_representation(
     raw.setdefault("name", representation_path.stem)
 
     specimen = load_specimen(registry_root, specimen_id)
-    if "axes" not in raw and specimen.default_axes is not None:
+    if "axes" not in raw and specimen.default_axes is not None and raw.get("kind") != "points":
         raw["axes"] = [axis.model_dump() for axis in specimen.default_axes]
     if "acquisition_date" not in raw and specimen.default_acquisition_date is not None:
         raw["acquisition_date"] = specimen.default_acquisition_date
 
-    representation: ImageRepresentation | SegmentationRepresentation = (
+    representation: ImageRepresentation | SegmentationRepresentation | PointsRepresentation = (
         _representation_adapter.validate_python(raw)
     )
     return representation
@@ -391,7 +393,7 @@ def create_representation(
         registry_root: Directory containing one subdirectory per specimen.
         specimen_id: The owning specimen's id.
         name: The representation's initial display name.
-        kind: `"image"` or `"segmentation"`.
+        kind: `"image"`, `"segmentation"`, or `"points"`.
         path: Filesystem path to the representation's data.
         depends_on: Other representations this one was produced from, each
             a `"<specimen id>.<representation id>"` reference.

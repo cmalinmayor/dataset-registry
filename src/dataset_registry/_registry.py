@@ -545,6 +545,62 @@ def set_specimen_fields(
     load_specimen(registry_root, specimen_id)
 
 
+def set_representation_fields(
+    registry_root: Path,
+    specimen_id: str,
+    representation_id: str,
+    *,
+    path: str | None = _UNSET,  # type: ignore[assignment]
+    acquisition_date: date | None = _UNSET,  # type: ignore[assignment]
+    metadata: dict[str, Any] | None = _UNSET,  # type: ignore[assignment]
+) -> None:
+    """Update one or more of a representation's own fields in place, in a single write.
+
+    Only the fields actually passed are changed -- `name`, `kind`, `axes`,
+    `channels`, `depends_on`, and every other field not accepted by this
+    function is left untouched (use `rename_representation` to change
+    `name`). Passing `None` for `acquisition_date` clears it (distinct from
+    not passing it at all, which leaves it as-is); `path` has no such clear
+    option since it's required. `metadata`, when passed, replaces the entire
+    `[metadata]` table rather than merging into it -- callers that want to
+    change one key should read the representation's current `metadata`
+    first.
+
+    Loads and re-validates the representation afterwards, so a call that
+    would leave its TOML invalid fails loudly rather than silently
+    corrupting the file.
+
+    Args:
+        registry_root: Directory containing one subdirectory per specimen.
+        specimen_id: The owning specimen's id.
+        representation_id: The representation's stable id.
+        path: The new filesystem path, or omitted to leave it unchanged.
+        acquisition_date: The new acquisition date, `None` to clear it, or
+            omitted to leave it unchanged.
+        metadata: The new `metadata` table, replacing it wholesale, or
+            omitted to leave it unchanged.
+    """
+    representation_path = _find_representation_path(registry_root, specimen_id, representation_id)
+    with representation_path.open("rb") as f:
+        raw = tomllib.load(f)
+
+    raw.setdefault("id", representation_path.stem)
+    raw.setdefault("name", representation_path.stem)
+    if path is not _UNSET:
+        raw["path"] = path
+    if acquisition_date is not _UNSET:
+        if acquisition_date is None:
+            raw.pop("acquisition_date", None)
+        else:
+            raw["acquisition_date"] = acquisition_date
+    if metadata is not _UNSET:
+        raw["metadata"] = metadata
+
+    with representation_path.open("wb") as f:
+        tomli_w.dump(raw, f)
+    load_representation(registry_root, specimen_id, raw["id"])
+
+
 def set_specimen_description(registry_root: Path, specimen_id: str, description: str) -> None:
     """Update one specimen's `description` field in place, leaving every other field untouched.
 

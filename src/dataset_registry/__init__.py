@@ -16,6 +16,7 @@ from ._registry import (
     rename_representation,
     rename_specimen,
     resolve_dependency,
+    set_representation_fields,
     set_specimen_description,
     set_specimen_fields,
 )
@@ -59,6 +60,7 @@ __all__ = [
     "rename_representation",
     "rename_specimen",
     "resolve_dependency",
+    "set_representation_fields",
     "set_specimen_description",
     "set_specimen_fields",
 ]

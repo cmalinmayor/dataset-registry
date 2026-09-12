@@ -317,3 +317,32 @@ def test_registry_falls_back_to_cache_on_fetch_failure(tmp_path, monkeypatch):
 def test_registry_raises_when_no_cache_and_clone_fails(tmp_path):
     with pytest.raises(subprocess.CalledProcessError):
         Registry((tmp_path / "no-such-remote").as_uri())
+
+
+def test_registry_with_fetch_false_reuses_cache_without_fetching(tmp_path, monkeypatch):
+    remote = _init_remote(tmp_path)
+
+    first = Registry(remote.as_uri())
+
+    _write_sample(remote, "SLS042")
+    _git(["add", "-A"], cwd=remote)
+    _git(["commit", "-qm", "update"], cwd=remote)
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("fetch=False should not fetch")
+
+    monkeypatch.setattr("dataset_registry._registry._fetch_latest", _boom)
+
+    second = Registry(remote.as_uri(), fetch=False)
+
+    assert second.path == first.path
+    assert second.commit == first.commit
+    assert second.list_samples() == ["SLS161"]  # SLS042 not picked up -- no fetch happened
+
+
+def test_registry_with_fetch_false_still_clones_when_no_cache_exists(tmp_path):
+    remote = _init_remote(tmp_path)
+
+    registry = Registry(remote.as_uri(), fetch=False)
+
+    assert registry.list_samples() == ["SLS161"]

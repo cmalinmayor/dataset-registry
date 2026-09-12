@@ -64,6 +64,27 @@ this representation by id picks up the new location automatically:
 registry.set_representation_fields(sample_id, representation_id, path="/nrs/shroff/raw.tif")
 ```
 
+### Git URL vs. local directory: two workflows
+
+`Registry` accepts either a git URL or a local directory, and deliberately
+treats them differently -- pick whichever matches how your team works:
+
+- **Git URL** (`Registry("https://github.com/<owner>/<repo>")`): for teams
+  where everyone is comfortable with git. Each user gets their own clone,
+  cached under a per-user directory and re-fetched (reset to the remote's
+  default branch tip) on every `Registry(...)` call by default. Anyone can
+  edit and `git push` their own changes; everyone else picks them up next
+  time they open the registry. Pass `fetch=False` to skip the network
+  round-trip and reuse whatever was last fetched.
+- **Local directory** (`Registry("/path/to/registry")`): for a shared
+  location (e.g. a fileshare) that non-git-users edit directly, often
+  through `dsr browse`. `Registry` is entirely git-oblivious here -- even if
+  the directory happens to be a git working tree, it never fetches, resets,
+  or commits anything on your behalf. A team lead can point the browser at
+  that shared path, let collaborators edit through it, and separately run
+  `git add`/`commit`/`push` by hand whenever they want to snapshot what
+  accumulated.
+
 ### Browsing a registry
 
 ```bash

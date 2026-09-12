@@ -79,7 +79,7 @@ def _current_commit(path: Path) -> str | None:
         return None
 
 
-def _resolve_local_path(location: str | Path) -> Path:
+def _resolve_local_path(location: str | Path, *, fetch: bool) -> Path:
     """Resolve `location` to a local directory, cloning it first if it's a git URL.
 
     If `location` is an existing local directory, returns it directly -- no
@@ -89,14 +89,15 @@ def _resolve_local_path(location: str | Path) -> Path:
 
     Otherwise, treats `location` as a git URL: clones (or reuses a cached
     clone of) it under a per-user cache directory, keyed by `location`, as a
-    shallow (`--depth=1`) clone, always fetching and resetting to the
-    remote's default branch tip first.
+    shallow (`--depth=1`) clone. If a cache already exists and `fetch` is
+    true, fetches and resets it to the remote's default branch tip first;
+    if `fetch` is false, the existing cache is used as-is, however stale.
 
-    If the fetch fails (e.g. no network) and a cached clone already exists,
-    falls back to it with a warning rather than failing outright -- better
-    to work against a possibly-stale registry than not run at all. If no
-    cache exists yet and the clone fails, there's nothing to fall back to,
-    so this raises.
+    If the fetch fails (e.g. no network), falls back to the existing cache
+    with a warning rather than failing outright -- better to work against a
+    possibly-stale registry than not run at all. If no cache exists yet, a
+    clone always happens regardless of `fetch` -- there's nothing to fall
+    back to otherwise.
     """
     local_path = Path(location)
     if local_path.is_dir():
@@ -107,7 +108,7 @@ def _resolve_local_path(location: str | Path) -> Path:
 
     if not cache_dir.is_dir():
         _clone(git_url, cache_dir)
-    else:
+    elif fetch:
         try:
             _fetch_latest(cache_dir)
         except (OSError, subprocess.SubprocessError) as e:
@@ -124,9 +125,9 @@ class Registry:
     """A registry of samples and representations: a local or git-hosted directory of TOML files.
 
     `location` is either an existing local directory (used directly, no
-    cloning) or a git URL (shallow-cloned, or reused from a per-user cache
-    and fetched to the remote's default branch tip). Every load/create/
-    rename/set call below is scoped to this one resolved directory.
+    cloning) or a git URL (shallow-cloned, or reused from a per-user cache).
+    Every load/create/rename/set call below is scoped to this one resolved
+    directory.
 
         <path>/
           <sample directory>/
@@ -148,8 +149,25 @@ class Registry:
     isn't inside a git repository -- e.g. a local directory passed directly,
     with no git history of its own."""
 
-    def __init__(self, location: str | Path) -> None:
-        path = _resolve_local_path(location)
+    def __init__(self, location: str | Path, *, fetch: bool = True) -> None:
+        """Resolve `location` to a local registry directory.
+
+        Args:
+            location: An existing local directory, or a git URL cloneable
+                with `git clone` (e.g. `"https://github.com/<owner>/<repo>"`).
+            fetch: If `location` is a git URL and a cached clone from a
+                previous `Registry(location)` call already exists, whether
+                to fetch and reset it to the remote's default branch tip
+                before use. Defaults to `True`, matching the historical
+                behavior of always pulling on open. Pass `False` to reuse
+                the existing cache as-is, however stale -- e.g. to avoid a
+                network round-trip on every call, or to pin to whatever was
+                last fetched until an explicit `Registry(location, fetch=True)`.
+                Ignored for a local-directory `location`, and for a git URL
+                with no existing cache -- both always use the freshest data
+                available (the directory itself, or a fresh clone).
+        """
+        path = _resolve_local_path(location, fetch=fetch)
         if not path.is_dir():
             raise NotADirectoryError(f"{path} is not a directory")
         self.path = path

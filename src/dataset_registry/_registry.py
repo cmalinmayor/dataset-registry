@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import re
 import subprocess
 import tomllib
 from pathlib import Path
@@ -19,6 +20,7 @@ REGISTRY_INFO_FILENAME = "registry.toml"
 
 _ID_GENERATION_ATTEMPTS = 100
 _CACHE_APP_NAME = "dataset-registry"
+_SLUG_MAX_WORDS = 4
 
 _logger = logging.getLogger(__name__)
 
@@ -32,18 +34,43 @@ def _load_raw(path: Path) -> dict[str, Any]:
     return raw
 
 
-def _generate_id(existing_ids: set[str]) -> str:
-    """A two-word coolname slug (e.g. `"happy-falcon"`) not already in `existing_ids`.
+def _slugify(name: str) -> str:
+    """Lowercase the first `_SLUG_MAX_WORDS` words of `name`, joined with `-`.
+
+    Non-alphanumeric runs are treated as word boundaries. Capped at
+    `_SLUG_MAX_WORDS` so a long display name (a full sentence, say) doesn't
+    produce an unwieldy id -- the random word suffix (see `_generate_id`)
+    still makes the id unique even when truncation collapses two different
+    names to the same prefix.
+    """
+    words = [word for word in re.split(r"[^a-z0-9]+", name.lower()) if word]
+    return "-".join(words[:_SLUG_MAX_WORDS])
+
+
+def _random_word() -> str:
+    # coolname has no single-word pattern; take one word off a two-word
+    # slug rather than fighting its config for a custom pattern.
+    slug: str = generate_slug(2)
+    return slug.split("-")[-1]
+
+
+def _generate_id(name: str, existing_ids: set[str]) -> str:
+    """A slugified-`name`-plus-random-word id (e.g. `"embryo-a-kudu"`) not in `existing_ids`.
+
+    The random word is always appended, even with no collision, so an id
+    never looks like it might just *be* the current display name -- `name`
+    is free to change later without the id looking like a stale copy of it.
 
     Raises:
         RuntimeError: If every attempt collided -- vanishingly unlikely for
             any registry that isn't enormous, but a silent infinite loop
             would be worse than a loud, rare failure.
     """
+    slug = _slugify(name) or "unnamed"
     for _ in range(_ID_GENERATION_ATTEMPTS):
-        slug: str = generate_slug(2)
-        if slug not in existing_ids:
-            return slug
+        candidate = f"{slug}-{_random_word()}"
+        if candidate not in existing_ids:
+            return candidate
     raise RuntimeError(f"could not generate a unique id after {_ID_GENERATION_ATTEMPTS} attempts")
 
 
@@ -216,21 +243,21 @@ class Registry:
             f"{sample_id!r} under {self.path}"
         )
 
-    def generate_sample_id(self) -> str:
-        """A two-word coolname slug not already used as a sample id in this registry."""
+    def generate_sample_id(self, name: str) -> str:
+        """A slugified-`name`-plus-random-word id not already used as a sample id here."""
         existing_ids = {
             _load_raw(sample_dir / SAMPLE_FILENAME)["id"] for sample_dir in self._sample_dirs()
         }
-        return _generate_id(existing_ids)
+        return _generate_id(name, existing_ids)
 
-    def generate_representation_id(self, sample_id: str) -> str:
-        """A two-word coolname slug not already used as a representation id for this sample."""
+    def generate_representation_id(self, sample_id: str, name: str) -> str:
+        """A slugified-`name`-plus-random-word id, unique among this sample's representations."""
         sample_dir = self._find_sample_dir(sample_id)
         representations_dir = sample_dir / REPRESENTATIONS_DIRNAME
         existing_ids = {
             _load_raw(path)["id"] for path in sorted(representations_dir.glob("*.toml"))
         }
-        return _generate_id(existing_ids)
+        return _generate_id(name, existing_ids)
 
     def load_sample(self, sample_id: str) -> Sample:
         """Load one sample by id.
@@ -304,6 +331,46 @@ class Registry:
         representations_dir = sample_dir / REPRESENTATIONS_DIRNAME
         return sorted(_load_raw(path)["id"] for path in representations_dir.glob("*.toml"))
 
+    def find_samples_by_name(self, name: str) -> list[Sample]:
+        """Every sample in this registry whose `name` matches exactly.
+
+        Names aren't required to be unique (`id` is the only unambiguous
+        handle), so this returns every match -- callers should handle 0
+        (no such name), 1, or more than 1 (ambiguous name) explicitly.
+
+        Args:
+            name: The display name to match, exactly and case-sensitively.
+
+        Returns:
+            Matching samples, in no particular order.
+        """
+        return [
+            sample
+            for sample_id in self.list_samples()
+            if (sample := self.load_sample(sample_id)).name == name
+        ]
+
+    def find_representations_by_name(self, sample_id: str, name: str) -> list[Representation]:
+        """Every representation of one sample whose `name` matches exactly.
+
+        Names aren't required to be unique (`id` is the only unambiguous
+        handle), so this returns every match -- callers should handle 0
+        (no such name), 1, or more than 1 (ambiguous name) explicitly.
+
+        Args:
+            sample_id: The owning sample's id.
+            name: The display name to match, exactly and case-sensitively.
+
+        Returns:
+            Matching representations, in no particular order.
+        """
+        return [
+            representation
+            for representation_id in self.list_representations(sample_id)
+            if (representation := self.load_representation(sample_id, representation_id)).name
+            == name
+        ]
+
     def create_sample(
         self, name: str, *, description: str | None = None, metadata: dict[str, Any] | None = None
     ) -> str:
@@ -317,7 +384,7 @@ class Registry:
         Returns:
             The newly generated sample id.
         """
-        sample_id = self.generate_sample_id()
+        sample_id = self.generate_sample_id(name)
         sample_dir = self.path / sample_id
         sample_dir.mkdir(parents=True)
 
@@ -354,7 +421,7 @@ class Registry:
         Returns:
             The newly generated representation id.
         """
-        representation_id = self.generate_representation_id(sample_id)
+        representation_id = self.generate_representation_id(sample_id, name)
         sample_dir = self._find_sample_dir(sample_id)
         representations_dir = sample_dir / REPRESENTATIONS_DIRNAME
         representations_dir.mkdir(exist_ok=True)

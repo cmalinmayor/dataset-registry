@@ -146,6 +146,36 @@ def test_list_representations_finds_every_representation_for_a_sample(tmp_path):
     assert registry.list_representations("SLS161") == ["cellpose_v3", "raw"]
 
 
+def test_find_samples_by_name_returns_every_match(tmp_path):
+    _write_sample(tmp_path, "a", name="Embryo A")
+    _write_sample(tmp_path, "b", name="Embryo A")
+    _write_sample(tmp_path, "c", name="Embryo B")
+    registry = Registry(tmp_path)
+
+    matches = registry.find_samples_by_name("Embryo A")
+
+    assert sorted(sample.id for sample in matches) == ["a", "b"]
+
+
+def test_find_samples_by_name_returns_empty_list_when_no_match(tmp_path):
+    _write_sample(tmp_path, "a", name="Embryo A")
+    registry = Registry(tmp_path)
+
+    assert registry.find_samples_by_name("does-not-exist") == []
+
+
+def test_find_representations_by_name_returns_every_match(tmp_path):
+    _write_sample(tmp_path, "SLS161")
+    _write_representation(tmp_path, "SLS161", "a", name="Raw scan", path="x")
+    _write_representation(tmp_path, "SLS161", "b", name="Raw scan", path="y")
+    _write_representation(tmp_path, "SLS161", "c", name="Segmentation", path="z")
+    registry = Registry(tmp_path)
+
+    matches = registry.find_representations_by_name("SLS161", "Raw scan")
+
+    assert sorted(representation.id for representation in matches) == ["a", "b"]
+
+
 def test_rename_sample_changes_name_without_moving_directory(tmp_path):
     _write_sample(tmp_path, "SLS161")
     registry = Registry(tmp_path)
@@ -197,15 +227,34 @@ def test_create_representation_generates_a_unique_id_and_is_loadable(tmp_path):
     assert representation.path == "/groups/shroff/raw.tif"
 
 
-def test_generate_sample_id_retries_on_a_forced_collision(tmp_path, monkeypatch):
-    slugs = iter(["taken", "taken", "fresh"])
-    monkeypatch.setattr("dataset_registry._registry.generate_slug", lambda _n: next(slugs))
+def test_generate_sample_id_slugifies_the_name_with_a_random_word_suffix(tmp_path):
     registry = Registry(tmp_path)
-    registry.create_sample("First")  # takes the "taken" slug
 
-    sample_id = registry.generate_sample_id()
+    sample_id = registry.generate_sample_id("Embryo A")
 
-    assert sample_id == "fresh"
+    prefix, _, suffix = sample_id.rpartition("-")
+    assert prefix == "embryo-a"
+    assert suffix  # a random word, always present
+
+
+def test_generate_sample_id_caps_the_slug_at_four_words(tmp_path):
+    registry = Registry(tmp_path)
+
+    sample_id = registry.generate_sample_id("Embryo A cross of SLS267 and OH15257")
+
+    prefix, _, _suffix = sample_id.rpartition("-")
+    assert prefix == "embryo-a-cross-of"
+
+
+def test_generate_sample_id_retries_on_a_forced_collision(tmp_path, monkeypatch):
+    words = iter(["taken", "taken", "fresh"])
+    monkeypatch.setattr("dataset_registry._registry._random_word", lambda: next(words))
+    registry = Registry(tmp_path)
+    registry.create_sample("First")  # takes "first-taken"
+
+    sample_id = registry.generate_sample_id("First")
+
+    assert sample_id == "first-fresh"
 
 
 def test_depends_on_resolves_by_id_after_the_referenced_representation_is_renamed(tmp_path):

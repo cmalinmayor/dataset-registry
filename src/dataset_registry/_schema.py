@@ -1,35 +1,6 @@
-from datetime import date
-from typing import Annotated, Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-
-
-class Axis(BaseModel):
-    """One axis of a pixel array.
-
-    Adapted from GEFF's ``Axis`` (https://liveimagetrackingtools.org/geff/latest/reference/geff_spec/#geff_spec.Axis)
-    and trimmed for pixel data: no ``min``/``max`` (GEFF caches those because
-    a graph's spatial extent needs a full node scan to compute; a pixel
-    array's extent is just ``shape * scale``, nothing to cache). No
-    ``scaled_unit``/``offset`` (GEFF needs those to disambiguate whether a
-    scale is already applied to graph coordinates; a pixel array's
-    convention is unambiguous -- indices are always in pixel units, and
-    ``scale`` always converts to physical units, never pre-applied).
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    name: str
-    """Axis name, e.g. ``"z"``, ``"y"``, ``"x"``, ``"t"``, ``"c"``."""
-
-    type: Literal["space", "time", "channel"] | None = None
-    """What kind of data this axis indexes, if known."""
-
-    unit: str | None = None
-    """Physical unit of `scale`, e.g. ``"micrometer"``, ``"second"``."""
-
-    scale: float | None = None
-    """Physical size of one pixel/step along this axis, in `unit`."""
 
 
 class RegistryInfo(BaseModel):
@@ -47,114 +18,47 @@ class RegistryInfo(BaseModel):
     a title derived from the registry root's directory name when unset."""
 
 
-class Specimen(BaseModel):
-    """The imaged subject, shared across all its representations.
-
-    `default_axes` / `default_acquisition_date` are explicitly fallback
-    defaults, not intrinsic specimen facts: a specimen imaged over multiple
-    rounds (e.g. a multi-round FISH sample) may have representations with
-    entirely different axes or acquisition dates. A representation only
-    inherits these when it doesn't specify its own -- see
-    `load_representation`.
-    """
+class Sample(BaseModel):
+    """A named, version-controlled entity that groups one or more representations of data."""
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str | None = None
-    """Stable identity, immutable once set -- unaffected by renaming `name`.
-
-    `None` on disk means this specimen predates stable IDs: its directory
-    name under `registry_root` doubles as its `id` until it's renamed for
-    the first time, at which point `id` is written explicitly. See
-    `load_specimen` for how this default is resolved, and `rename_specimen`
-    for how it's backfilled.
-    """
+    id: str
+    """Stable identity, immutable once set -- unaffected by renaming `name`."""
 
     name: str
-    """Display name. Free to differ from the specimen's directory name once
-    `id` is set explicitly; must match the directory name while `id` is
-    still unset (the legacy convention), checked by `load_specimen`."""
+    """Display name. Free to change without affecting `id`."""
 
     description: str | None = None
-    default_axes: list[Axis] | None = None
-    default_acquisition_date: date | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    """Free-form, project-defined fields. Projects that want a validated
+    shape can parse this dict into their own pydantic model without any
+    change to the registry itself."""
 
 
-class _RepresentationBase(BaseModel):
+class Representation(BaseModel):
+    """A named path to a specific piece of data belonging to a `Sample`."""
+
     model_config = ConfigDict(extra="forbid")
 
-    id: str | None = None
-    """Stable identity, immutable once set -- unaffected by renaming `name`.
+    id: str
+    """Stable identity, immutable once set -- unaffected by renaming `name`."""
 
-    `None` on disk means this representation predates stable IDs: its
-    filename (minus `.toml`) doubles as its `id` until it's renamed for the
-    first time. Same convention as `Specimen.id`; see `load_representation`.
-    """
-
-    name: str | None = None
-    """Display name. `None` on disk means this representation predates
-    stable IDs: its filename (minus `.toml`) doubles as its `name`, same as
-    today's convention, until it's renamed via `rename_representation`."""
+    name: str
+    """Display name. Free to change without affecting `id`."""
 
     path: str
-    """Filesystem path to this representation's data."""
+    """Filesystem path to this representation's data. The whole point of
+    this registry: code refers to a representation by `id`, so `path` can
+    change (the data gets moved) without any change to downstream code."""
 
     depends_on: list[str] | None = None
-    """Other representations this one was produced from, each a
-    ``"<specimen id>.<representation id>"`` reference. See
-    `resolve_dependency`. IDs, not display names -- stable across renames.
-    """
+    """Ids of other representations of the same sample that this one was
+    produced from. IDs, not display names -- stable across renames. Load a
+    dependency with ``registry.load_representation(sample_id, dependency_id)``,
+    reusing this representation's own `sample_id`."""
 
-    acquisition_date: date | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class ImageRepresentation(_RepresentationBase):
-    """A pixel image: raw acquisition, or a hand-processed variant of one.
-
-    Both raw and processed images share this same `kind` -- what
-    distinguishes them is `depends_on` (a processed image points back at the
-    raw one it was produced from; raw data has no `depends_on`), not a
-    separate `kind` value.
-    """
-
-    kind: Literal["image"] = "image"
-    axes: list[Axis]
-    """Required: a pixel array can't be loaded or displayed without knowing
-    what its axes mean."""
-
-    channels: dict[int, str] | None = None
-    """Channel index -> label, e.g. ``{1: "nuclear"}``."""
-
-
-class SegmentationRepresentation(_RepresentationBase):
-    """A label image, typically promoted from an experimental run's output.
-
-    See CONTRIBUTING.md / project scratch notes on "promotion": this
-    registry only ever records a *deliberately promoted* segmentation (a
-    human decided "this one is the current best"), never a live pointer
-    into an experiment-tracking system's run directory.
-    """
-
-    kind: Literal["segmentation"] = "segmentation"
-    axes: list[Axis]
-    """Required, same reasoning as `ImageRepresentation.axes`."""
-
-
-class PointsRepresentation(_RepresentationBase):
-    """Point annotations (e.g. per-timepoint nucleus/cell coordinates), not a pixel array.
-
-    No `axes`: unlike `ImageRepresentation`/`SegmentationRepresentation`,
-    this isn't a pixel array with a fixed shape -- it's a set of points
-    (typically one file per timepoint), so there's no array shape for
-    `axes` to describe.
-    """
-
-    kind: Literal["points"] = "points"
-
-
-Representation = Annotated[
-    ImageRepresentation | SegmentationRepresentation | PointsRepresentation,
-    Field(discriminator="kind"),
-]
+    """Free-form, project-defined fields. Projects that want a validated
+    shape can parse this dict into their own pydantic model without any
+    change to the registry itself."""

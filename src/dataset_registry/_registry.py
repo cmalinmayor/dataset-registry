@@ -248,6 +248,12 @@ class Registry:
         self._sample_metadata = sample_metadata_model
         self._representation_metadata = representation_metadata_model
 
+    def __repr__(self) -> str:
+        title = self.load_registry_info().title
+        if title is not None:
+            return f"Registry(title={title!r}, path={str(self.path)!r})"
+        return f"Registry(path={str(self.path)!r})"
+
     def _sample_dirs(self) -> list[Path]:
         return sorted(p.parent for p in self.path.glob(f"*/{SAMPLE_FILENAME}"))
 
@@ -596,3 +602,35 @@ class Registry:
             representation.metadata = self._representation_metadata.model_validate(metadata or {})
 
         _write_model(representation_path, representation)
+
+
+def create_registry(
+    path: str | Path,
+    *,
+    title: str | None = None,
+) -> None:
+    """Create a new, empty registry directory on disk
+
+    Args:
+        path: Local directory to create the registry in. Created (with any
+            missing parents) if it doesn't already exist; an existing empty
+            directory is fine too.
+        title: The registry's display title, written to `registry.toml` as
+            `RegistryInfo.title`. Mutually exclusive with `registry_info` --
+            pass whichever is more convenient; omit both to write no
+            `registry.toml` at all (same as an already-existing registry
+            with no title set).
+
+    Raises:
+        FileExistsError: If `path` already exists and is non-empty --
+            `create_registry` is for new registries, not for re-initializing
+            or overwriting one that already has contents.
+    """
+    registry_path = Path(path)
+    if registry_path.is_dir() and any(registry_path.iterdir()):
+        raise FileExistsError(f"{registry_path} already exists and is non-empty")
+    registry_path.mkdir(parents=True, exist_ok=True)
+
+    if title is not None:
+        registry_info = RegistryInfo(title=title)
+        _write_model(registry_path / REGISTRY_INFO_FILENAME, registry_info)

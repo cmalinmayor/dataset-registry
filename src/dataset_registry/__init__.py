@@ -3,7 +3,7 @@
 from importlib.metadata import PackageNotFoundError, version
 
 from ._browser import browse
-from ._registry import Registry
+from ._registry import Registry, create_registry
 from ._schema import FreeformMetadata, RegistryInfo, Representation, Sample
 
 try:
@@ -21,4 +21,5 @@ __all__ = [
     "Sample",
     "__version__",
     "browse",
+    "create_registry",
 ]

@@ -13,7 +13,7 @@ from platformdirs import user_cache_dir
 from pydantic import BaseModel
 
 from dataset_registry._paths import Path
-from dataset_registry._schema import RegistryInfo, Representation, Sample
+from dataset_registry._schema import FreeformMetadata, RegistryInfo, Representation, Sample
 
 SAMPLE_FILENAME = "sample.toml"
 REPRESENTATIONS_DIRNAME = "representations"
@@ -33,6 +33,22 @@ def _load_raw(path: Path) -> dict[str, Any]:
     with path.open("rb") as f:
         raw: dict[str, Any] = tomllib.load(f)
     return raw
+
+
+def _load_model(
+    model_cls: type[Sample] | type[Representation],
+    raw: dict[str, Any],
+    *,
+    metadata_model: type[BaseModel],
+) -> Any:
+    """`model_cls.model_validate(raw)`, with `metadata` validated into `metadata_model`.
+
+    `metadata` in `raw` is always a plain dict (TOML has no concept of a
+    pydantic model) -- this is the one place that turns it into a
+    `metadata_model` instance before `model_cls`'s own fields are validated.
+    """
+    raw = {**raw, "metadata": metadata_model.model_validate(raw.get("metadata", {}))}
+    return model_cls.model_validate(raw)
 
 
 def _write_model(path: Path, model: BaseModel) -> None:
@@ -193,7 +209,14 @@ class Registry:
     isn't inside a git repository -- e.g. a local directory passed directly,
     with no git history of its own."""
 
-    def __init__(self, location: str | Path, *, fetch: bool = True) -> None:
+    def __init__(
+        self,
+        location: str | Path,
+        *,
+        fetch: bool = True,
+        sample_metadata_model: type[BaseModel] = FreeformMetadata,
+        representation_metadata_model: type[BaseModel] = FreeformMetadata,
+    ) -> None:
         """Resolve `location` to a local registry directory.
 
         Args:
@@ -210,12 +233,20 @@ class Registry:
                 Ignored for a local-directory `location`, and for a git URL
                 with no existing cache -- both always use the freshest data
                 available (the directory itself, or a fresh clone).
+            sample_metadata_model: Every `load_sample` call validates
+                `metadata` into this pydantic model -- a project-specific
+                `BaseModel` with its own typed fields, or the default
+                `FreeformMetadata`, which accepts any keys with no validation.
+            representation_metadata_model: Same as `sample_metadata_model`,
+                for `load_representation`.
         """
         path = _resolve_local_path(location, fetch=fetch)
         if not path.is_dir():
             raise NotADirectoryError(f"{path} is not a directory")
         self.path = path
         self.commit = _current_commit(path)
+        self._sample_metadata = sample_metadata_model
+        self._representation_metadata = representation_metadata_model
 
     def _sample_dirs(self) -> list[Path]:
         return sorted(p.parent for p in self.path.glob(f"*/{SAMPLE_FILENAME}"))
@@ -283,14 +314,15 @@ class Registry:
             sample_id: The sample's stable id.
 
         Returns:
-            The loaded sample.
+            The loaded sample, with `metadata` validated into this
+            registry's `sample_metadata model`.
 
         Raises:
             FileNotFoundError: If no sample with this id exists.
         """
         sample_dir = self._find_sample_dir(sample_id)
         raw = _load_raw(sample_dir / SAMPLE_FILENAME)
-        sample = Sample.model_validate(raw)
+        sample: Sample = _load_model(Sample, raw, metadata_model=self._sample_metadata)
         return sample
 
     def load_representation(self, sample_id: str, representation_id: str) -> Representation:
@@ -301,14 +333,17 @@ class Registry:
             representation_id: The representation's stable id.
 
         Returns:
-            The loaded representation.
+            The loaded representation, with `metadata` validated into this
+            registry's `representation_metadata`.
 
         Raises:
             FileNotFoundError: If no such sample or representation exists.
         """
         representation_path = self._find_representation_path(sample_id, representation_id)
         raw = _load_raw(representation_path)
-        representation = Representation.model_validate(raw)
+        representation: Representation = _load_model(
+            Representation, raw, metadata_model=self._representation_metadata
+        )
         return representation
 
     def load_registry_info(self) -> RegistryInfo:
@@ -405,7 +440,12 @@ class Registry:
         sample_dir = self.path / sample_id
         sample_dir.mkdir(parents=True)
 
-        sample = Sample(id=sample_id, name=name, description=description, metadata=metadata or {})
+        sample = Sample(
+            id=sample_id,
+            name=name,
+            description=description,
+            metadata=self._sample_metadata.model_validate(metadata or {}),
+        )
         _write_model(sample_dir / SAMPLE_FILENAME, sample)
         return sample_id
 
@@ -441,7 +481,7 @@ class Registry:
             name=name,
             path=path,
             depends_on=depends_on,
-            metadata=metadata or {},
+            metadata=self._representation_metadata.model_validate(metadata or {}),
         )
         representation_path = representations_dir / f"{representation_id}.toml"
         _write_model(representation_path, representation)
@@ -455,7 +495,7 @@ class Registry:
             new_name: The new display name.
         """
         sample_path = self._find_sample_dir(sample_id) / SAMPLE_FILENAME
-        sample = Sample.model_validate(_load_raw(sample_path))
+        sample = _load_model(Sample, _load_raw(sample_path), metadata_model=self._sample_metadata)
         sample.name = new_name
         _write_model(sample_path, sample)
 
@@ -468,7 +508,11 @@ class Registry:
             new_name: The new display name.
         """
         representation_path = self._find_representation_path(sample_id, representation_id)
-        representation = Representation.model_validate(_load_raw(representation_path))
+        representation = _load_model(
+            Representation,
+            _load_raw(representation_path),
+            metadata_model=self._representation_metadata,
+        )
         representation.name = new_name
         _write_model(representation_path, representation)
 
@@ -501,12 +545,12 @@ class Registry:
                 omitted to leave it unchanged.
         """
         sample_path = self._find_sample_dir(sample_id) / SAMPLE_FILENAME
-        sample = Sample.model_validate(_load_raw(sample_path))
+        sample = _load_model(Sample, _load_raw(sample_path), metadata_model=self._sample_metadata)
 
         if description is not _UNSET:
             sample.description = description
         if metadata is not _UNSET:
-            sample.metadata = metadata or {}
+            sample.metadata = self._sample_metadata.model_validate(metadata or {})
 
         _write_model(sample_path, sample)
 
@@ -540,11 +584,15 @@ class Registry:
                 omitted to leave it unchanged.
         """
         representation_path = self._find_representation_path(sample_id, representation_id)
-        representation = Representation.model_validate(_load_raw(representation_path))
+        representation = _load_model(
+            Representation,
+            _load_raw(representation_path),
+            metadata_model=self._representation_metadata,
+        )
 
         if path is not _UNSET:
             representation.path = path
         if metadata is not _UNSET:
-            representation.metadata = metadata or {}
+            representation.metadata = self._representation_metadata.model_validate(metadata or {})
 
         _write_model(representation_path, representation)

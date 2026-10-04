@@ -33,7 +33,7 @@ def _sample_row(registry: Registry, sample_id: str) -> dict[str, Any]:
         "id": sample.id,
         "description": sample.description,
         "n_representations": len(registry.list_representations(sample_id)),
-        **sample.metadata,
+        **sample.metadata.model_dump(exclude_none=True),
     }
 
 
@@ -54,7 +54,7 @@ def _representation_row(
         "id": representation.id,
         "path": representation.path,
         "depends_on": _depends_on_names(registry, sample_id, representation.depends_on or []),
-        **representation.metadata,
+        **representation.metadata.model_dump(exclude_none=True),
     }
 
 
@@ -150,7 +150,9 @@ def _sample_view(registry: Registry, sample_id: str) -> "panel.Column":
         f"**Description:** {sample.description or '*unset*'}",
     ]
     lines.append("**Metadata**")
-    metadata_lines = [f"- **{k}:** {v}" for k, v in sample.metadata.items()]
+    metadata_lines = [
+        f"- **{k}:** {v}" for k, v in sample.metadata.model_dump(exclude_none=True).items()
+    ]
     lines.extend(metadata_lines or ["*No metadata.*"])
 
     return panel.Column(
@@ -202,7 +204,7 @@ def _sample_edit_form(
         remove_button.on_click(lambda event: metadata_rows.remove(row))
         metadata_rows.append(row)
 
-    for key, value in sample.metadata.items():
+    for key, value in sample.metadata.model_dump(exclude_none=True).items():
         _add_metadata_row(key, value)
 
     add_row_button = panel.widgets.Button(name="+ Add field", width=120)
@@ -332,7 +334,9 @@ def _representation_view(
         f"**Depends on:** {depends_on or '*none*'}",
     ]
     lines.append("**Metadata**")
-    metadata_lines = [f"- **{k}:** {v}" for k, v in representation.metadata.items()]
+    metadata_lines = [
+        f"- **{k}:** {v}" for k, v in representation.metadata.model_dump(exclude_none=True).items()
+    ]
     lines.extend(metadata_lines or ["*No metadata.*"])
 
     return panel.Column(
@@ -383,7 +387,7 @@ def _representation_edit_form(
         remove_button.on_click(lambda event: metadata_rows.remove(row))
         metadata_rows.append(row)
 
-    for key, value in representation.metadata.items():
+    for key, value in representation.metadata.model_dump(exclude_none=True).items():
         _add_metadata_row(key, value)
 
     add_row_button = panel.widgets.Button(name="+ Add field", width=120)

@@ -110,7 +110,7 @@ def test_load_representation_reads_metadata_and_depends_on(tmp_path):
     representation = registry.load_representation("SLS161", "cellpose_v3")
 
     assert representation.depends_on == ["raw"]
-    assert representation.metadata == {"channel_label": "nuclear"}
+    assert representation.metadata.model_dump(exclude_none=True) == {"channel_label": "nuclear"}
 
 
 def test_depends_on_is_loaded_via_load_representation_with_the_same_sample_id(tmp_path):

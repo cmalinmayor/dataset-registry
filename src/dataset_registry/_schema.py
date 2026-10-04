@@ -5,6 +5,18 @@ from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_valid
 from dataset_registry._paths import Path, to_linux_str
 
 
+class FreeformMetadata(BaseModel):
+    """The default, project-agnostic shape for `Sample`/`Representation` `metadata`.
+
+    Accepts any keys with no validation -- the registry's own fallback when
+    no project-specific `sample_metadata_model`/`representation_metadata_model`
+    is given to `Registry.__init__`. A project that wants validated fields
+    passes its own `BaseModel` subclass there instead.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+
 class RegistryInfo(BaseModel):
     """Registry-level settings, read from an optional `registry.toml` at the registry root.
 
@@ -23,7 +35,9 @@ class RegistryInfo(BaseModel):
 class Sample(BaseModel):
     """A named, version-controlled entity that groups one or more representations of data."""
 
-    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+    model_config = ConfigDict(
+        extra="forbid", validate_assignment=True, arbitrary_types_allowed=True
+    )
 
     id: str
     """Stable identity, immutable once set -- unaffected by renaming `name`."""
@@ -32,16 +46,22 @@ class Sample(BaseModel):
     """Display name. Free to change without affecting `id`."""
 
     description: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    """Free-form, project-defined fields. Projects that want a validated
-    shape can parse this dict into their own pydantic model without any
-    change to the registry itself."""
+    metadata: Any = Field(default_factory=FreeformMetadata)
+    """Always a `BaseModel` instance: `FreeformMetadata` (accepts any keys)
+    unless `Registry.__init__` was given a `sample_metadata_model`, in which
+    case it's an instance of that model instead. Typed `Any` rather than a
+    `BaseModel | dict` union -- pydantic-core's union serializer doesn't
+    recurse into an arbitrary nested `BaseModel` correctly, silently
+    dropping its fields on write; `Any` serializes a runtime `BaseModel`
+    value as-is."""
 
 
 class Representation(BaseModel):
     """A named path to a specific piece of data belonging to a `Sample`."""
 
-    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+    model_config = ConfigDict(
+        extra="forbid", validate_assignment=True, arbitrary_types_allowed=True
+    )
 
     id: str
     """Stable identity, immutable once set -- unaffected by renaming `name`."""
@@ -71,7 +91,9 @@ class Representation(BaseModel):
     dependency with ``registry.load_representation(sample_id, dependency_id)``,
     reusing this representation's own `sample_id`."""
 
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    """Free-form, project-defined fields. Projects that want a validated
-    shape can parse this dict into their own pydantic model without any
-    change to the registry itself."""
+    metadata: Any = Field(default_factory=FreeformMetadata)
+    """Always a `BaseModel` instance: `FreeformMetadata` (accepts any keys)
+    unless `Registry.__init__` was given a `representation_metadata_model`,
+    in which case it's an instance of that model instead. See
+    `Sample.metadata` for why this is typed `Any` rather than a
+    `BaseModel | dict` union."""

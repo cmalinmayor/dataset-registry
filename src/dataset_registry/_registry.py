@@ -5,13 +5,14 @@ import logging
 import re
 import subprocess
 import tomllib
-from pathlib import Path
 from typing import Any
 
 import tomli_w
 from coolname import generate_slug
 from platformdirs import user_cache_dir
+from pydantic import BaseModel
 
+from dataset_registry._paths import Path
 from dataset_registry._schema import RegistryInfo, Representation, Sample
 
 SAMPLE_FILENAME = "sample.toml"
@@ -32,6 +33,18 @@ def _load_raw(path: Path) -> dict[str, Any]:
     with path.open("rb") as f:
         raw: dict[str, Any] = tomllib.load(f)
     return raw
+
+
+def _write_model(path: Path, model: BaseModel) -> None:
+    """Serialize `model` and write it to `path` as TOML.
+
+    Writing always goes through a validated model -- never a hand-built
+    dict -- so a caller can't persist a `sample.toml`/representation TOML
+    that wouldn't itself pass `model_validate` on the next load.
+    """
+    raw = model.model_dump(exclude_none=True)
+    with path.open("wb") as f:
+        tomli_w.dump(raw, f)
 
 
 def _slugify(name: str) -> str:
@@ -169,7 +182,11 @@ class Registry:
     """
 
     path: Path
-    """Local path this registry resolved to."""
+    """Local path this registry resolved to.
+
+    A `JaneliaPath` if `janelia-pathlib` is installed (the `janelia` extra),
+    else a plain `Path` -- see `dataset_registry._paths`.
+    """
 
     commit: str | None
     """The full commit SHA `path` is checked out at, or `None` if `path`
@@ -388,15 +405,8 @@ class Registry:
         sample_dir = self.path / sample_id
         sample_dir.mkdir(parents=True)
 
-        raw: dict[str, Any] = {"id": sample_id, "name": name}
-        if description is not None:
-            raw["description"] = description
-        if metadata is not None:
-            raw["metadata"] = metadata
-
-        with (sample_dir / SAMPLE_FILENAME).open("wb") as f:
-            tomli_w.dump(raw, f)
-        self.load_sample(sample_id)
+        sample = Sample(id=sample_id, name=name, description=description, metadata=metadata or {})
+        _write_model(sample_dir / SAMPLE_FILENAME, sample)
         return sample_id
 
     def create_representation(
@@ -426,16 +436,15 @@ class Registry:
         representations_dir = sample_dir / REPRESENTATIONS_DIRNAME
         representations_dir.mkdir(exist_ok=True)
 
-        raw: dict[str, Any] = {"id": representation_id, "name": name, "path": path}
-        if depends_on is not None:
-            raw["depends_on"] = depends_on
-        if metadata is not None:
-            raw["metadata"] = metadata
-
+        representation = Representation(
+            id=representation_id,
+            name=name,
+            path=path,
+            depends_on=depends_on,
+            metadata=metadata or {},
+        )
         representation_path = representations_dir / f"{representation_id}.toml"
-        with representation_path.open("wb") as f:
-            tomli_w.dump(raw, f)
-        self.load_representation(sample_id, representation_id)
+        _write_model(representation_path, representation)
         return representation_id
 
     def rename_sample(self, sample_id: str, new_name: str) -> None:
@@ -446,12 +455,9 @@ class Registry:
             new_name: The new display name.
         """
         sample_path = self._find_sample_dir(sample_id) / SAMPLE_FILENAME
-        raw = _load_raw(sample_path)
-        raw["name"] = new_name
-
-        with sample_path.open("wb") as f:
-            tomli_w.dump(raw, f)
-        self.load_sample(sample_id)
+        sample = Sample.model_validate(_load_raw(sample_path))
+        sample.name = new_name
+        _write_model(sample_path, sample)
 
     def rename_representation(self, sample_id: str, representation_id: str, new_name: str) -> None:
         """Change a representation's display `name`.
@@ -462,12 +468,9 @@ class Registry:
             new_name: The new display name.
         """
         representation_path = self._find_representation_path(sample_id, representation_id)
-        raw = _load_raw(representation_path)
-        raw["name"] = new_name
-
-        with representation_path.open("wb") as f:
-            tomli_w.dump(raw, f)
-        self.load_representation(sample_id, representation_id)
+        representation = Representation.model_validate(_load_raw(representation_path))
+        representation.name = new_name
+        _write_model(representation_path, representation)
 
     def set_sample_fields(
         self,
@@ -486,9 +489,9 @@ class Registry:
         `[metadata]` table rather than merging into it -- callers that want
         to change one key should read the sample's current `metadata` first.
 
-        Loads and re-validates the sample afterwards, so a call that would
-        leave `sample.toml` invalid (e.g. writing to a sample that doesn't
-        exist) fails loudly rather than silently corrupting the file.
+        Validates the updated sample before writing, so a call that would
+        produce an invalid sample fails loudly rather than silently
+        corrupting the file.
 
         Args:
             sample_id: The sample's stable id.
@@ -498,26 +501,21 @@ class Registry:
                 omitted to leave it unchanged.
         """
         sample_path = self._find_sample_dir(sample_id) / SAMPLE_FILENAME
-        raw = _load_raw(sample_path)
+        sample = Sample.model_validate(_load_raw(sample_path))
 
         if description is not _UNSET:
-            if description is None:
-                raw.pop("description", None)
-            else:
-                raw["description"] = description
+            sample.description = description
         if metadata is not _UNSET:
-            raw["metadata"] = metadata
+            sample.metadata = metadata or {}
 
-        with sample_path.open("wb") as f:
-            tomli_w.dump(raw, f)
-        self.load_sample(sample_id)
+        _write_model(sample_path, sample)
 
     def set_representation_fields(
         self,
         sample_id: str,
         representation_id: str,
         *,
-        path: str | None = _UNSET,  # type: ignore[assignment]
+        path: str = _UNSET,  # type: ignore[assignment]
         metadata: dict[str, Any] | None = _UNSET,  # type: ignore[assignment]
     ) -> None:
         """Update one or more of a representation's own fields in place, in a single write.
@@ -530,9 +528,9 @@ class Registry:
         -- callers that want to change one key should read the
         representation's current `metadata` first.
 
-        Loads and re-validates the representation afterwards, so a call
-        that would leave its TOML invalid fails loudly rather than silently
-        corrupting the file.
+        Validates the updated representation before writing, so a call that
+        would produce an invalid representation fails loudly rather than
+        silently corrupting the file.
 
         Args:
             sample_id: The owning sample's id.
@@ -542,13 +540,11 @@ class Registry:
                 omitted to leave it unchanged.
         """
         representation_path = self._find_representation_path(sample_id, representation_id)
-        raw = _load_raw(representation_path)
+        representation = Representation.model_validate(_load_raw(representation_path))
 
         if path is not _UNSET:
-            raw["path"] = path
+            representation.path = path
         if metadata is not _UNSET:
-            raw["metadata"] = metadata
+            representation.metadata = metadata or {}
 
-        with representation_path.open("wb") as f:
-            tomli_w.dump(raw, f)
-        self.load_representation(sample_id, representation_id)
+        _write_model(representation_path, representation)

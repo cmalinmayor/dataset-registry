@@ -33,6 +33,7 @@ dependencies = [
 
 [project.optional-dependencies]
 browse = ["pandas>=2,<3", "panel>=1.4,<2"]
+janelia = ["janelia-pathlib @ git+https://github.com/JaneliaSciComp/janelia-pathlib"]
 
 [project.scripts]
 dsr = "dataset_registry._cli:main"
@@ -47,11 +48,13 @@ repository = "https://github.com/JaneliaSciComp/dataset_registry"
 test = ["pytest>=9.1,<10", "pytest-cov>=7.1,<8"]
 dev = [
     { include-group = "test" },
+    { include-group = "janelia" },
     "ipython>=9.16,<10",
     "mypy>=2.3,<3",
     "pre-commit>=4.6,<5",
     "ruff>=0.16,<0.17",
 ]
+janelia = ["dataset-registry[janelia]"]
 
 # enables dynamic versioning from git tags
 [tool.setuptools_scm]

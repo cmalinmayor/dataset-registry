@@ -1,6 +1,8 @@
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+
+from dataset_registry._paths import Path, to_linux_str
 
 
 class RegistryInfo(BaseModel):
@@ -21,7 +23,7 @@ class RegistryInfo(BaseModel):
 class Sample(BaseModel):
     """A named, version-controlled entity that groups one or more representations of data."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     id: str
     """Stable identity, immutable once set -- unaffected by renaming `name`."""
@@ -39,7 +41,7 @@ class Sample(BaseModel):
 class Representation(BaseModel):
     """A named path to a specific piece of data belonging to a `Sample`."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     id: str
     """Stable identity, immutable once set -- unaffected by renaming `name`."""
@@ -51,6 +53,17 @@ class Representation(BaseModel):
     """Filesystem path to this representation's data. The whole point of
     this registry: code refers to a representation by `id`, so `path` can
     change (the data gets moved) without any change to downstream code."""
+
+    @field_validator("path", mode="before")
+    @classmethod
+    def _resolve_path(cls, value: str) -> str:
+        """Normalize `value` to the current OS's form on read, via `Path`."""
+        return str(Path(value))
+
+    @field_serializer("path")
+    def _serialize_path(self, value: str) -> str:
+        """Translate `value` to its Linux form on write -- the inverse of `_resolve_path`."""
+        return to_linux_str(value)
 
     depends_on: list[str] | None = None
     """Ids of other representations of the same sample that this one was
